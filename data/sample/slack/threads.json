@@ -1,0 +1,58 @@
+[
+  {
+    "channel": "capability-help",
+    "thread_ts": "1719000001.000100",
+    "url": "https://slack.example.com/archives/C01CAPHELP/p1719000001000100",
+    "messages": [
+      {
+        "user": "sam.okonkwo",
+        "ts": "1719000001.000100",
+        "text": "How do I create a new capability? First time doing this — is there a checklist?"
+      },
+      {
+        "user": "alex.chen",
+        "ts": "1719000060.000200",
+        "text": "Yep! Open a CAP ticket in Jira, fill the capability manifest, open a city-map PR for ownership/deps, then ping platform for review. Full guide is on DevPortal under Capabilities → Create a Capability."
+      },
+      {
+        "user": "priya.sharma",
+        "ts": "1719000120.000300",
+        "text": "Also join #capability-help and #platform-oncall. City map approval usually takes 2–3 business days."
+      }
+    ]
+  },
+  {
+    "channel": "capability-help",
+    "thread_ts": "1719500001.000400",
+    "url": "https://slack.example.com/archives/C01CAPHELP/p1719500001000400",
+    "messages": [
+      {
+        "user": "morgan.park",
+        "ts": "1719500001.000400",
+        "text": "Who owns the Payments capability these days?"
+      },
+      {
+        "user": "jordan.lee",
+        "ts": "1719500100.000500",
+        "text": "Payments (payments-v2) is owned by the Money Movement team — lead is alex.chen. Check city map if you need the dependency list."
+      }
+    ]
+  },
+  {
+    "channel": "platform-oncall",
+    "thread_ts": "1720000001.000600",
+    "url": "https://slack.example.com/archives/C01PLATFORM/p1720000001000600",
+    "messages": [
+      {
+        "user": "sam.okonkwo",
+        "ts": "1720000001.000600",
+        "text": "Capability registration failing with 'missing owner team' — what am I missing?"
+      },
+      {
+        "user": "alex.chen",
+        "ts": "1720000200.000700",
+        "text": "Your city-map node needs an `owner_team` field. Manifest alone isn't enough — registry syncs from the city map."
+      }
+    ]
+  }
+]

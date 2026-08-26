@@ -1,0 +1,52 @@
+[
+  {
+    "key": "CAP-101",
+    "summary": "Register Payments capability in platform registry",
+    "description": "We need to register the Payments capability following the new capability creation process. Includes defining ownership, SLAs, and dependency graph entry in the city map.",
+    "status": "In Progress",
+    "labels": ["capability", "payments", "onboarding"],
+    "assignee": "alex.chen",
+    "reporter": "priya.sharma",
+    "updated": "2026-07-12T14:30:00Z",
+    "url": "https://jira.example.com/browse/CAP-101",
+    "comments": [
+      {
+        "author": "alex.chen",
+        "body": "DevPortal guide says we must open a CAP ticket, fill the capability manifest, then get city-map approval from the platform team."
+      },
+      {
+        "author": "priya.sharma",
+        "body": "Blocked on confirming owner team for Payments — see city map node payments-v2."
+      }
+    ]
+  },
+  {
+    "key": "CAP-88",
+    "summary": "Capability creation checklist gaps in DevPortal",
+    "description": "Engineers report that the DevPortal 'Create a Capability' page is missing the Slack #capability-help channel and the city-map PR requirement.",
+    "status": "Done",
+    "labels": ["docs", "capability", "devportal"],
+    "assignee": "jordan.lee",
+    "reporter": "sam.okonkwo",
+    "updated": "2026-06-01T09:00:00Z",
+    "url": "https://jira.example.com/browse/CAP-88",
+    "comments": [
+      {
+        "author": "jordan.lee",
+        "body": "Updated DevPortal docs. New checklist: (1) CAP ticket (2) manifest YAML (3) city-map PR (4) platform review."
+      }
+    ]
+  },
+  {
+    "key": "CAP-120",
+    "summary": "Identity capability depends on Auth Gateway",
+    "description": "Document dependency: Identity capability cannot launch without Auth Gateway v3. Tracked for Q3 capability onboarding.",
+    "status": "Open",
+    "labels": ["identity", "dependency", "capability"],
+    "assignee": "morgan.park",
+    "reporter": "alex.chen",
+    "updated": "2026-07-20T11:15:00Z",
+    "url": "https://jira.example.com/browse/CAP-120",
+    "comments": []
+  }
+]
