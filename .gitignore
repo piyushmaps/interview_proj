@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Env & secrets
+.env
+.env.local
+*.pem
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Data / local indexes
+data/raw/
+data/processed/
+data/index/
+*.faiss
+*.pkl
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker / Terraform local
+.terraform/
+*.tfstate*
+terraform.tfvars
