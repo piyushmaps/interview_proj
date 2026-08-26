@@ -1,0 +1,6 @@
+capability,capability_id,owner_team,owner_lead,escalation_contact,support_channel,on_call_rotation,tier
+Payments,payments-v2,money-movement,alex.chen,priya.nair,#payments-support,PagerDuty: money-movement-primary,1
+Auth Gateway,auth-gateway,identity-platform,morgan.park,sam.oliver,#auth-gateway-help,PagerDuty: identity-primary,1
+Ledger Core,ledger-core,money-movement,alex.chen,priya.nair,#ledger-core,PagerDuty: money-movement-primary,1
+Identity,identity,identity-platform,morgan.park,sam.oliver,#identity-help,PagerDuty: identity-primary,2
+Capability Registry,capability-registry,platform,jordan.lee,casey.kim,#capability-registry,PagerDuty: platform-core,1

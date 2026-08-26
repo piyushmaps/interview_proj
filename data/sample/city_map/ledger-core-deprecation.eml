@@ -1,0 +1,24 @@
+From: alex.chen@intuit.example.com
+To: platform-announce@intuit.example.com
+Subject: Ledger Core v1 API deprecation timeline
+Date: Mon, 13 Jul 2026 09:42:00 -0700
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+Team,
+
+Heads up on the Ledger Core v1 API deprecation timeline:
+
+- Aug 15, 2026: v1 write endpoints move to read-only.
+- Sep 30, 2026: v1 endpoints return 410 Gone. All consumers must be on v2.
+
+Payments has already migrated to v2. If your capability still calls
+POST /ledger/v1/entries, switch to POST /ledger/v2/journal-entries.
+The v2 API requires an idempotency key header on all writes.
+
+Migration guide: https://devportal.example.com/docs/ledger-v2-migration
+Questions: #ledger-core
+
+Thanks,
+Alex Chen
+Ledger Core / Payments — money-movement
