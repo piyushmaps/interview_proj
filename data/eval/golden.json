@@ -1,0 +1,32 @@
+[
+  {
+    "id": "q1",
+    "question": "How do I create a new capability?",
+    "expected_sources": ["devportal", "slack", "jira"],
+    "must_mention": ["CAP ticket", "manifest", "city map"]
+  },
+  {
+    "id": "q2",
+    "question": "Who owns the Payments capability?",
+    "expected_sources": ["city_map", "slack"],
+    "must_mention": ["money-movement", "alex.chen"]
+  },
+  {
+    "id": "q3",
+    "question": "What are the stages of the capability lifecycle?",
+    "expected_sources": ["devportal"],
+    "must_mention": ["Proposed", "Registered", "Active", "Deprecated"]
+  },
+  {
+    "id": "q4",
+    "question": "Why does capability registration fail with missing owner team?",
+    "expected_sources": ["slack", "devportal"],
+    "must_mention": ["city map", "owner_team"]
+  },
+  {
+    "id": "q5",
+    "question": "What open Jira tickets relate to Identity capability dependencies?",
+    "expected_sources": ["jira", "city_map"],
+    "must_mention": ["CAP-120", "Auth Gateway"]
+  }
+]
