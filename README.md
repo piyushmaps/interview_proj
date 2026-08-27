@@ -21,8 +21,9 @@ The agent **routes** to the right sources, **decomposes** multi-part questions, 
 | 3 | ✅ Scaffolded | Baseline RAG |
 | 4 | ✅ Scaffolded | LangGraph agent (router → retrieve → synthesize) |
 | 5 | ✅ Implemented | Golden eval set + routing/grounding metrics |
-| 6 | 🔜 Scaffolded | AWS (ECS, S3, Lambda, OpenSearch, CloudWatch) |
-| 7 | 🔜 | Streaming, memory, scheduled sync |
+| 6 | ✅ Implemented | Streaming/resumable ingestion + OpenSearch backend |
+| 7 | 🔜 Scaffolded | AWS deploy (ECS, S3, Lambda, CloudWatch) |
+| 8 | 🔜 | Reranking, conversational memory, scheduled sync |
 
 ## Quick start
 
@@ -60,6 +61,23 @@ Interactive docs: http://localhost:8000/docs
 python -m src.eval.harness --baseline
 ```
 
+### Running at scale
+
+FAISS is the default because it needs no server. Switch to OpenSearch for native
+metadata filtering, per-document updates, and hybrid keyword+vector search:
+
+```bash
+docker compose -f infra/docker-compose.yml up -d opensearch
+```
+
+Then set `VECTOR_STORE=opensearch` in `.env` and re-run ingestion. Ingestion is
+incremental — documents are fingerprinted, so unchanged ones are never
+re-embedded and an interrupted run resumes where it stopped:
+
+```bash
+python -m src.ingestion.pipeline --full-refresh
+```
+
 ## Project layout
 
 ```
@@ -67,7 +85,8 @@ src/
   models/          # Shared Document schema
   connectors/      # Jira, Slack, DevPortal, City Map loaders
   ingestion/       # Chunk, embed, index pipeline
-  retrieval/       # Vector retrieval with source filtering
+  vectorstore/     # Pluggable backends: FAISS (local) | OpenSearch (scale)
+  retrieval/       # Query embedding + relevance policy
   agent/           # LangGraph: router → retrieve → synthesize
   eval/            # Golden-set harness: routing + grounding metrics
   api/             # FastAPI chat endpoint

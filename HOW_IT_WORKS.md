@@ -118,18 +118,87 @@ Chunking (`src/ingestion/chunking.py`) is **source-aware**, not one-size-fits-al
 - **Every chunk carries metadata**: source, title, URL. This enables the two features that
   come later — source-filtered retrieval and clickable citations.
 
-Chunks are embedded with OpenAI `text-embedding-3-small` and written to the vector store:
+### Not everything deserves an embedding
 
-- **FAISS** locally (`data/index/faiss`) — simple, file-based, rebuilt from scratch each run.
-- **OpenSearch** in production — because streaming upserts need per-document
-  delete-and-insert, which a rebuild-only FAISS index can't do.
+The first scaling lesson had nothing to do with infrastructure. A folder of real
+exports arrived — a 900k-row crime table, a 60k-row insurance table, three calculus
+textbooks — and the naive reading of "index everything" produced **1.15 million
+documents**: 7 GB of vectors and hours of embedding, for a corpus where most rows read
+`4.5, 2.3, 1.3, 0.3, Setosa`.
 
-The full pipeline lives in `src/ingestion/pipeline.py`:
-connectors → normalize → chunk → embed → save index.
+Rows like that embed to nearly the same point. Semantic search over a million of them
+returns noise, at real cost. So sheets are handled by what they *are*, not by their
+extension (`src/connectors/city_map.py`):
+
+| Sheet | Treatment | Why |
+|---|---|---|
+| Small reference table (≤ 500 rows) | one document per row | "who owns Payments" should match exactly one row |
+| Large data table | **one profile document** | schema, row count, per-column statistics, sample rows — answers "what's in this dataset?" without embedding a million rows |
+| Large table with a prose column | profile **plus** rows, up to a cap | news articles and ticket bodies are genuinely worth retrieving |
+
+The column-type detection is a heuristic on cell length: a column averaging 200+
+characters carries prose, not a category. That single rule took the corpus from
+**1,149,072 documents to 4,577** — and from roughly $5 and several hours to $0.13 and
+minutes — with no loss of anything a question could actually reach.
+
+### Ingestion that survives a real corpus
+
+`src/ingestion/pipeline.py` is a chain of generators, not a sequence of lists:
+
+```
+connectors → documents → hash → chunk → embed → vector store
+                          ↓ unchanged?
+                        skipped
+```
+
+Peak memory is set by the batch size, not the corpus. Four properties come from that
+shape, and each one exists because of a specific failure:
+
+- **Incremental.** Every document is fingerprinted (SHA-256 of its indexable text) in a
+  SQLite manifest. Unchanged documents are never re-embedded, so a second run over an
+  unchanged corpus costs **zero API calls** — and editing one file re-embeds one file.
+- **Resumable.** Progress commits as batches land, so a run killed at 70% restarts at
+  70%. This needed no extra machinery: resume is what skipping unchanged documents
+  already does.
+- **Isolated failures.** A corrupt PDF is logged and skipped. A failing embedding API is
+  fatal *on purpose* — a half-indexed corpus reporting success is worse than a job that
+  stops, and the manifest makes the retry cheap.
+- **Self-cleaning.** Documents that vanish from a source are detected by comparing this
+  run against the manifest, and deleted. Without it the index keeps answering from files
+  that no longer exist.
+
+Large PDFs stream as page-range documents rather than one blob, so a 1,000-page book is
+18 documents with citations that point at *pages 101–150* instead of at "the book".
 
 ```bash
-python -m src.ingestion.pipeline
+python -m src.ingestion.pipeline                 # incremental
+python -m src.ingestion.pipeline --full-refresh  # re-embed everything
 ```
+
+### Choosing the vector store
+
+Both backends implement one interface (`src/vectorstore/base.py`), so the pipeline and
+the retriever are identical either way. What differs is what the backend can do:
+
+| | FAISS (local) | OpenSearch (scale) |
+|---|---|---|
+| Metadata filter | after the search, with an escalating window | **inside** the query |
+| Update one document | rewrite its chunk ids | native, by id |
+| Keyword search | none | BM25, fused with vectors |
+| Memory | every vector resident | sharded, quantizable |
+| Ceiling | ~1M chunks on a laptop | horizontal |
+
+One rule holds the abstraction together: **score is cosine similarity, higher is better,
+in every backend.** FAISS returns an inner product over normalised vectors; OpenSearch
+returns its own scaling, undone at the boundary. Because the conversion is a claim about
+someone else's engine, it is verified against a live cluster rather than trusted from
+documentation — `tests/test_opensearch_store.py::test_score_is_cosine_similarity`.
+
+Hybrid search matters more than it looks. Pure semantic retrieval reliably misses exact
+tokens — ticket keys, error strings, column names — because `CAP-120` has no distinctive
+meaning to an embedding model. OpenSearch runs a keyword query alongside the vector
+query and fuses the two by **rank** (reciprocal-rank fusion), which sidesteps the fact
+that BM25 scores and cosine scores are not comparable quantities.
 
 ### One vector index or one per source?
 
@@ -217,9 +286,14 @@ LLM output — never trust raw LLM output as a control signal.
 ### 2. Retrieve (`retrieve_evidence` + `src/retrieval/retriever.py`)
 
 Each sub-query hits the vector store **filtered to the routed sources**, concurrently
-(sub-queries are independent I/O-bound searches). FAISS can't filter natively, so the
-retriever over-fetches with an escalating window and post-filters on chunk metadata,
-then dedupes results across sub-queries in a stable order.
+(sub-queries are independent I/O-bound searches), and results are deduped across
+sub-queries in a stable order.
+
+The retriever itself is now small, which is the point: filtering is the backend's job,
+so `src/retrieval/retriever.py` holds only what is genuinely retrieval *policy* — embed
+the query, ask for the routed sources, and drop neighbours that are near in rank but far
+in meaning. FAISS's post-filtering workaround lives inside the FAISS backend, where no
+caller inherits it.
 
 ### 3. Synthesize (`synthesize_answer`)
 
@@ -244,9 +318,16 @@ rationale — the agent's reasoning is fully inspectable.
 | DevPortal / City Map data | Sample files in `data/sample/` | Data lake → BPP job → S3 landing zone |
 | Jira / Slack data | Sample JSON files | Kafka/Kinesis events → Lambda consumer |
 | Ingestion trigger | Manual `python -m src.ingestion.pipeline` | S3 event → Lambda → ECS task; stream events |
-| Vector store | FAISS (full rebuild) | OpenSearch (incremental upserts) |
+| Vector store | FAISS, or OpenSearch in Docker | Amazon OpenSearch Service |
+| Ingestion mode | Incremental, resumable, content-hashed | **The same code** |
 | API hosting | uvicorn on localhost | ECS Fargate + ALB |
-| Monitoring | Logs | CloudWatch: latency, error rate, **ingestion lag** |
+| Monitoring | Run stats + logs | CloudWatch: latency, error rate, **ingestion lag** |
+
+The row that matters is the third. Ingestion is not a laptop script with a production
+rewrite waiting behind it — streaming, hashing, batching, checkpointing, and pruning are
+the same code path at 500 MB and at 200 GB. What changes with scale is the backend
+(`VECTOR_STORE=opensearch`), where the job runs, and how many workers run it — not the
+logic.
 
 The local setup is a laptop-sized simulation of the production architecture — same code path,
 different I/O at the edges.
@@ -298,9 +379,14 @@ scaffolded in `infra/` as the deployment target.
 |---|---|
 | `src/models/document.py` | Canonical `Document` schema all sources normalize into |
 | `src/connectors/` | Per-source adapters: raw data → `Document` |
-| `src/ingestion/chunking.py` | Source-aware chunking with metadata preserved |
-| `src/ingestion/pipeline.py` | Connectors → chunk → embed → FAISS index |
-| `src/retrieval/retriever.py` | Vector search with source filtering |
+| `src/ingestion/extractors.py` | Per-format extraction; sheet profiling; streaming PDF |
+| `src/ingestion/chunking.py` | Source-aware chunking, streamed, deterministic chunk ids |
+| `src/ingestion/manifest.py` | Content hashes — incremental, resumable, self-cleaning |
+| `src/ingestion/pipeline.py` | Streaming orchestrator: hash → chunk → embed → upsert |
+| `src/vectorstore/base.py` | Backend contract; cosine scores everywhere |
+| `src/vectorstore/opensearch.py` | Native filters, per-doc deletes, hybrid BM25 + kNN |
+| `src/vectorstore/faiss_store.py` | Local backend; owns its own filtering workaround |
+| `src/retrieval/retriever.py` | Query embedding + relevance policy |
 | `src/agent/` | LangGraph: route → retrieve → synthesize |
 | `src/api/main.py` | FastAPI `POST /ask` endpoint |
 | `src/config.py` | Settings from `.env` (models, chunk sizes, AWS placeholders) |
