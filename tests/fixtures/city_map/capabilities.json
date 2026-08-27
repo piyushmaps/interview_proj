@@ -1,0 +1,56 @@
+{
+  "nodes": [
+    {
+      "id": "payments-v2",
+      "name": "Payments",
+      "owner_team": "money-movement",
+      "owner_lead": "alex.chen",
+      "status": "active",
+      "sla": "99.9",
+      "description": "Payment initiation and settlement capability for TurboTax and QuickBooks consumers."
+    },
+    {
+      "id": "auth-gateway",
+      "name": "Auth Gateway",
+      "owner_team": "identity-platform",
+      "owner_lead": "morgan.park",
+      "status": "active",
+      "sla": "99.95",
+      "description": "Central authentication and token issuance for internal capabilities."
+    },
+    {
+      "id": "ledger-core",
+      "name": "Ledger Core",
+      "owner_team": "money-movement",
+      "owner_lead": "alex.chen",
+      "status": "active",
+      "sla": "99.9",
+      "description": "Double-entry ledger used by Payments and billing workflows."
+    },
+    {
+      "id": "identity",
+      "name": "Identity",
+      "owner_team": "identity-platform",
+      "owner_lead": "morgan.park",
+      "status": "registered",
+      "sla": "99.9",
+      "description": "User identity profiles. Depends on Auth Gateway v3 before launch."
+    },
+    {
+      "id": "capability-registry",
+      "name": "Capability Registry",
+      "owner_team": "platform",
+      "owner_lead": "jordan.lee",
+      "status": "active",
+      "sla": "99.99",
+      "description": "Source of truth for registered capabilities; syncs ownership from the city map."
+    }
+  ],
+  "edges": [
+    {"from": "payments-v2", "to": "auth-gateway", "type": "depends_on"},
+    {"from": "payments-v2", "to": "ledger-core", "type": "depends_on"},
+    {"from": "identity", "to": "auth-gateway", "type": "depends_on"},
+    {"from": "payments-v2", "to": "capability-registry", "type": "registered_in"},
+    {"from": "identity", "to": "capability-registry", "type": "registered_in"}
+  ]
+}

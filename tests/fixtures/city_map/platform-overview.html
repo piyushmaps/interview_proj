@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>City Map Platform Overview</title>
+</head>
+<body>
+  <nav class="top-nav">
+    <a href="/">Home</a> | <a href="/docs">Docs</a> | <a href="/teams">Teams</a> | <a href="/login">Sign in</a>
+  </nav>
+  <div class="cookie-banner">We use cookies to improve your experience. <button>Accept</button></div>
+
+  <main>
+    <h1>City Map Platform Overview</h1>
+
+    <p>The City Map is the topology layer for all registered capabilities. It records
+    which team owns each capability, what it depends on, and its lifecycle status.
+    The Capability Registry syncs ownership data from the City Map every 15 minutes.</p>
+
+    <h2>How dependencies are modeled</h2>
+    <p>Each capability is a node. Edges are typed: <code>depends_on</code> for runtime
+    dependencies and <code>registered_in</code> for registry membership. A capability
+    cannot move to Active status while any of its <code>depends_on</code> targets are
+    still in Proposed state.</p>
+
+    <h2>Ownership rules</h2>
+    <ul>
+      <li>Every node must declare an <strong>owner_team</strong> before registration.
+          Registration fails with a missing-owner-team validation error otherwise.</li>
+      <li>Tier 1 capabilities require a named escalation contact and an on-call rotation.</li>
+      <li>Ownership changes must be approved by the platform team (jordan.lee).</li>
+    </ul>
+
+    <h2>SLA tiers</h2>
+    <p>Tier 1 capabilities commit to 99.9% availability or higher. The Capability
+    Registry itself runs at 99.99% because every deploy pipeline queries it.</p>
+  </main>
+
+  <footer>
+    <p>&copy; 2026 Intuit Inc. Internal use only.</p>
+    <a href="/privacy">Privacy</a> | <a href="/terms">Terms</a> | <a href="/contact">Contact</a>
+  </footer>
+  <script>console.log("analytics beacon");</script>
+</body>
+</html>

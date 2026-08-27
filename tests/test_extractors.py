@@ -1,11 +1,13 @@
 """Extraction-quality smoke tests for the multi-format City Map source."""
 
+from pathlib import Path
 
-from src.config import SAMPLE_DIR
 from src.connectors import CityMapConnector
 from src.ingestion.extractors import extract_eml, extract_html, extract_pdf, extract_sheet
 
-CITY_MAP_DIR = SAMPLE_DIR / "city_map"
+# A fixed, small corpus: tests must not depend on whatever is sitting in
+# data/sample, which is real user data and can be hundreds of megabytes.
+CITY_MAP_DIR = Path(__file__).parent / "fixtures" / "city_map"
 
 
 def test_html_strips_boilerplate_keeps_content():
@@ -45,7 +47,7 @@ def test_pdf_extracts_pages():
 
 
 def test_city_map_connector_loads_all_formats():
-    docs = CityMapConnector().load()
+    docs = CityMapConnector(path=CITY_MAP_DIR).load()
     formats = {d.metadata.get("format") for d in docs}
     assert {"graph", "sheet", "html", "pdf", "eml"} <= formats
     # Sheet becomes one doc per row
