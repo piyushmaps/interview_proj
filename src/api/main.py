@@ -16,18 +16,23 @@ from src.retrieval.retriever import SourceRetriever
 logger = logging.getLogger(__name__)
 
 _retriever: SourceRetriever | None = None
+_chunk_count = 0
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global _retriever
+    global _retriever, _chunk_count
     settings = get_settings()
     logging.basicConfig(level=settings.log_level)
+    logging.getLogger("faiss.loader").setLevel(logging.WARNING)
     try:
         _retriever = SourceRetriever()
-        logger.info("FAISS index loaded")
-    except FileNotFoundError as exc:
-        logger.warning("%s — /ask will fail until you run ingestion", exc)
+        _chunk_count = _retriever.store.count()
+        logger.info("vector store ready: %s, %d chunks", settings.vector_store, _chunk_count)
+        if _chunk_count == 0:
+            logger.warning("index is empty — run: python -m src.ingestion.pipeline")
+    except Exception as exc:  # noqa: BLE001 - surfaced through /health instead
+        logger.warning("vector store unavailable (%s) — /ask will fail until it is", exc)
         _retriever = None
     yield
 
@@ -54,8 +59,14 @@ class AskResponse(BaseModel):
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "index": "ready" if _retriever else "missing"}
+def health() -> dict[str, Any]:
+    settings = get_settings()
+    return {
+        "status": "ok" if _retriever and _chunk_count else "degraded",
+        "vector_store": settings.vector_store,
+        "chunks": _chunk_count,
+        "index": "ready" if _retriever and _chunk_count else "empty or unavailable",
+    }
 
 
 @app.post("/ask", response_model=AskResponse)
@@ -63,7 +74,7 @@ def ask(body: AskRequest) -> AskResponse:
     if _retriever is None:
         raise HTTPException(
             status_code=503,
-            detail="Vector index not built. Run: python -m src.ingestion.pipeline",
+            detail="Vector store unavailable or empty. Run: python -m src.ingestion.pipeline",
         )
     result = run_agent(body.question, retriever=_retriever)
     return AskResponse(**result)

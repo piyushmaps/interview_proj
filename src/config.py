@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     opensearch_port: int = 9200
     opensearch_index: str = "capability_docs"
     opensearch_use_ssl: bool = False
+    opensearch_verify_certs: bool = False
+    opensearch_user: str = ""
+    opensearch_password: str = ""
+    opensearch_timeout: int = 60
+    # HNSW breadth at query time: higher is more accurate and slower.
+    opensearch_ef_search: int = 100
+
+    # Fuse keyword (BM25) and vector rankings. Pure semantic search misses exact
+    # tokens — ticket keys, error strings, column names. OpenSearch only.
+    hybrid_search: bool = True
 
     aws_region: str = "us-east-1"
     s3_bucket: str = "intuit-agentic-rag-docs"
@@ -54,7 +64,29 @@ class Settings(BaseSettings):
     top_k: int = 6
     # Max L2 distance for a chunk to count as relevant. Measured on the sample
     # corpus: on-topic questions score 0.54-0.79, off-topic ones 1.35-1.77.
-    relevance_threshold: float = 1.2
+    # Minimum cosine similarity for a chunk to count as relevant. Measured on
+    # the sample corpus: on-topic questions score 0.69-0.85, off-topic 0.09 and
+    # below. Scores are cosine everywhere, so this means the same in any backend.
+    min_similarity: float = 0.28
+
+    # --- ingestion ---
+    # Chunks per embedding round-trip. Small enough that a failure costs one
+    # batch, large enough to keep request overhead low.
+    embed_batch_size: int = 256
+    # Flush the index and manifest every N batches, so a long run is resumable.
+    checkpoint_every_batches: int = 20
+    # Tracks content hashes so unchanged documents are never re-embedded.
+    manifest_path: str = "data/index/manifest.sqlite"
+    # Files that fail extraction are logged and skipped; abort past this many.
+    max_extraction_failures: int = 100
+
+    # Sheets at or below this stay one-document-per-row (reference tables such
+    # as an ownership roster). Larger ones are profiled instead of enumerated.
+    csv_small_sheet_rows: int = 500
+    # For large sheets that carry prose, how many rows to index individually.
+    csv_max_text_rows: int = 2000
+    # Pages per PDF document. Bounds memory and makes citations page-specific.
+    pdf_pages_per_document: int = 50
     chunk_size: int = 800
     chunk_overlap: int = 120
 

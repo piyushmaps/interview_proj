@@ -41,3 +41,20 @@ Thumbs.db
 .terraform/
 *.tfstate*
 terraform.tfvars
+
+# Source data drops. These are inputs, not source code: hundreds of megabytes,
+# regenerable, and past GitHub's 100 MB per-file limit. The small artifacts the
+# demo and tests rely on are re-included below; tests use tests/fixtures/ anyway.
+data/sample/city_map/*.csv
+data/sample/city_map/*.pdf
+data/sample/city_map/*.parquet
+data/sample/city_map/*.json
+!data/sample/city_map/capabilities.json
+!data/sample/city_map/capability-owners.csv
+!data/sample/city_map/architecture-overview.pdf
+
+# macOS AppleDouble sidecars
+._*
+
+# Ingestion state (rebuilt by re-running the pipeline)
+data/index/
