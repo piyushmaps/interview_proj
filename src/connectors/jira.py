@@ -1,6 +1,7 @@
 """Jira connector — loads sample tickets (swap for Jira REST API later)."""
 
 import json
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 
@@ -13,14 +14,11 @@ class JiraConnector(BaseConnector):
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or SAMPLE_DIR / "jira" / "tickets.json"
 
-    def load(self) -> list[Document]:
+    def iter_documents(self) -> Iterator[Document]:
         raw = json.loads(self.path.read_text(encoding="utf-8"))
-        docs: list[Document] = []
         for ticket in raw:
             comments = ticket.get("comments") or []
-            comment_text = "\n".join(
-                f"- {c['author']}: {c['body']}" for c in comments
-            )
+            comment_text = "\n".join(f"- {c['author']}: {c['body']}" for c in comments)
             body_parts = [
                 ticket.get("description") or "",
                 f"Status: {ticket.get('status')}",
@@ -30,23 +28,20 @@ class JiraConnector(BaseConnector):
             if comment_text:
                 body_parts.append("Comments:\n" + comment_text)
 
-            docs.append(
-                Document(
-                    id=f"jira:{ticket['key']}",
-                    source=SourceType.JIRA,
-                    title=f"{ticket['key']}: {ticket['summary']}",
-                    body="\n\n".join(p for p in body_parts if p),
-                    url=ticket.get("url") or f"https://jira.example.com/browse/{ticket['key']}",
-                    author=ticket.get("reporter"),
-                    updated_at=_parse_dt(ticket.get("updated")),
-                    metadata={
-                        "key": ticket["key"],
-                        "status": ticket.get("status"),
-                        "labels": ticket.get("labels") or [],
-                    },
-                )
+            yield Document(
+                id=f"jira:{ticket['key']}",
+                source=SourceType.JIRA,
+                title=f"{ticket['key']}: {ticket['summary']}",
+                body="\n\n".join(p for p in body_parts if p),
+                url=ticket.get("url") or f"https://jira.example.com/browse/{ticket['key']}",
+                author=ticket.get("reporter"),
+                updated_at=_parse_dt(ticket.get("updated")),
+                metadata={
+                    "key": ticket["key"],
+                    "status": ticket.get("status"),
+                    "labels": ticket.get("labels") or [],
+                },
             )
-        return docs
 
 
 def _parse_dt(value: str | None) -> datetime | None:

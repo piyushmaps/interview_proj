@@ -1,5 +1,6 @@
 """DevPortal connector — loads Markdown docs."""
 
+from collections.abc import Iterator
 from pathlib import Path
 
 from src.config import SAMPLE_DIR
@@ -11,22 +12,18 @@ class DevPortalConnector(BaseConnector):
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or SAMPLE_DIR / "devportal"
 
-    def load(self) -> list[Document]:
-        docs: list[Document] = []
+    def iter_documents(self) -> Iterator[Document]:
         for md_file in sorted(self.path.glob("*.md")):
             text = md_file.read_text(encoding="utf-8")
             title = _first_heading(text) or md_file.stem.replace("-", " ").title()
-            docs.append(
-                Document(
-                    id=f"devportal:{md_file.stem}",
-                    source=SourceType.DEVPORTAL,
-                    title=title,
-                    body=text,
-                    url=f"https://devportal.example.com/docs/{md_file.stem}",
-                    metadata={"path": str(md_file.name)},
-                )
+            yield Document(
+                id=f"devportal:{md_file.stem}",
+                source=SourceType.DEVPORTAL,
+                title=title,
+                body=text,
+                url=f"https://devportal.example.com/docs/{md_file.stem}",
+                metadata={"path": str(md_file.name)},
             )
-        return docs
 
 
 def _first_heading(text: str) -> str | None:
