@@ -1,18 +1,24 @@
-"""Vector retrieval with optional source filters."""
+"""Retrieval over whichever vector backend is configured.
+
+This module used to carry FAISS's limitations — an escalating over-fetch window
+to work around the lack of metadata filtering. That workaround now lives inside
+the FAISS backend, where it belongs, and OpenSearch does not need it at all.
+What is left here is the part that is genuinely retrieval policy rather than
+storage mechanics: embed the query, ask for the routed sources, and drop
+neighbours that are near in rank but far in meaning.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
-from langchain_community.vectorstores import FAISS
-from langchain_core.documents import Document as LCDocument
+from langchain_openai import OpenAIEmbeddings
 
 from src.config import get_settings
-from src.ingestion.pipeline import load_index
 from src.models.document import SourceType
-
-# Growth factor applied to the fetch window on each round when filtering.
-FETCH_ESCALATION = 3
+from src.vectorstore.base import VectorStore
+from src.vectorstore.factory import get_vector_store
 
 
 @dataclass
@@ -21,81 +27,63 @@ class RetrievedChunk:
     source: str
     title: str
     url: str
-    score: float | None = None
+    score: float | None = None  # cosine similarity; higher is better
 
 
 class SourceRetriever:
-    def __init__(self, store: FAISS | None = None) -> None:
+    def __init__(
+        self,
+        store: VectorStore | None = None,
+        embeddings: OpenAIEmbeddings | None = None,
+    ) -> None:
         settings = get_settings()
-        self.store = store or load_index()
+        self.store = store if store is not None else get_vector_store(settings)
+        self.embeddings = embeddings or OpenAIEmbeddings(
+            model=settings.openai_embedding_model,
+            api_key=settings.openai_api_key,
+        )
         self.top_k = settings.top_k
-        self.relevance_threshold = settings.relevance_threshold
+        self.min_similarity = settings.min_similarity
 
     def retrieve(
         self,
         query: str,
-        sources: list[SourceType] | list[str] | None = None,
+        sources: Iterable[SourceType] | Iterable[str] | None = None,
         k: int | None = None,
-        max_distance: float | None = -1.0,
+        min_similarity: float | None = -2.0,
     ) -> list[RetrievedChunk]:
+        """Chunks relevant to `query`, restricted to `sources` when given.
+
+        `min_similarity` defaults to the configured cutoff; pass None to disable
+        it. -2.0 is the sentinel for "use the default" because it sits below the
+        cosine range, so it can never be mistaken for a real threshold.
+        """
         k = k or self.top_k
-        # -1.0 sentinel = use the configured default; None = no cutoff.
-        if max_distance == -1.0:
-            max_distance = self.relevance_threshold
-        source_values = None
-        if sources:
-            source_values = {
-                s.value if isinstance(s, SourceType) else s for s in sources
-            }
+        if min_similarity == -2.0:
+            min_similarity = self.min_similarity
 
-        if not source_values:
-            results = self.store.similarity_search_with_score(query, k=k)
-            return _drop_irrelevant(
-                [_to_chunk(doc, float(score)) for doc, score in results], max_distance
+        source_values = (
+            [s.value if isinstance(s, SourceType) else str(s) for s in sources]
+            if sources
+            else None
+        )
+
+        vector = self.embeddings.embed_query(query)
+        hits = self.store.search(vector, k=k, sources=source_values, query_text=query)
+
+        # A vector index has no notion of "no match" — it returns the k nearest
+        # neighbours however distant. Without this, an off-corpus question comes
+        # back with a full set of citations that support nothing.
+        if min_similarity is not None:
+            hits = [h for h in hits if h.score >= min_similarity]
+
+        return [
+            RetrievedChunk(
+                content=h.chunk.content,
+                source=h.chunk.source,
+                title=h.chunk.title,
+                url=h.chunk.url,
+                score=h.score,
             )
-
-        # FAISS has no native metadata filter, so we over-fetch and post-filter.
-        # A *fixed* window silently truncates recall: when the routed sources are
-        # a small slice of the corpus their chunks fall outside the global top-N
-        # and disappear, so narrowing the route makes retrieval return *less*
-        # — the opposite of what routing is for. Escalate the window until we
-        # have k hits or the index is exhausted.
-        total = self.store.index.ntotal
-        fetch_k = min(k * FETCH_ESCALATION, total)
-        while True:
-            results = self.store.similarity_search_with_score(query, k=fetch_k)
-            chunks = [
-                _to_chunk(doc, float(score))
-                for doc, score in results
-                if doc.metadata.get("source", "") in source_values
-            ][:k]
-            if len(chunks) >= k or fetch_k >= total:
-                # Cutoff is applied *after* escalation: widening the window only
-                # ever surfaces more distant chunks, so it can never recover one
-                # that failed the threshold.
-                return _drop_irrelevant(chunks, max_distance)
-            fetch_k = min(fetch_k * FETCH_ESCALATION, total)
-
-
-def _drop_irrelevant(
-    chunks: list[RetrievedChunk], max_distance: float | None
-) -> list[RetrievedChunk]:
-    """Discard chunks the index returned as "nearest" that are not actually close.
-
-    FAISS always returns k neighbours, however distant. Without this, an
-    off-corpus question still produces a full set of citations pointing at
-    unrelated documents. Returning nothing lets the agent say so honestly.
-    """
-    if max_distance is None:
-        return chunks
-    return [c for c in chunks if c.score is None or c.score <= max_distance]
-
-
-def _to_chunk(doc: LCDocument, score: float) -> RetrievedChunk:
-    return RetrievedChunk(
-        content=doc.page_content,
-        source=str(doc.metadata.get("source", "")),
-        title=str(doc.metadata.get("title", "")),
-        url=str(doc.metadata.get("url", "")),
-        score=score,
-    )
+            for h in hits
+        ]
