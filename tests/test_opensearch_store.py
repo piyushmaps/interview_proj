@@ -21,7 +21,7 @@ from src.config import get_settings
 from src.vectorstore.base import Chunk
 
 opensearchpy = pytest.importorskip("opensearchpy")
-from src.vectorstore.opensearch import OpenSearchVectorStore  # noqa: E402
+from src.vectorstore.opensearch import OpenSearchVectorStore
 
 QUERY = [1.0, 0.0]
 
