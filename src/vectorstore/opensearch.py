@@ -16,6 +16,7 @@ corpus is large:
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -131,7 +132,7 @@ class OpenSearchVectorStore:
         knn_hits = self._knn(vector, k, source_list)
         if not (self.hybrid and query_text):
             return knn_hits
-        return _fuse(knn_hits, self._bm25(query_text, k, source_list), k)
+        return _fuse(knn_hits, self._bm25(query_text, k, source_list, vector), k)
 
     def _filter(self, sources: list[str] | None) -> dict[str, Any] | None:
         return {"terms": {"source": sources}} if sources else None
@@ -145,7 +146,7 @@ class OpenSearchVectorStore:
         hits = self.client.search(index=self.index, body=body)["hits"]["hits"]
         return [SearchHit(chunk=_to_chunk(h), score=_cosine_from_score(h["_score"])) for h in hits]
 
-    def _bm25(self, query_text: str, k: int, sources) -> list[SearchHit]:
+    def _bm25(self, query_text: str, k: int, sources, vector: Sequence[float]) -> list[SearchHit]:
         query: dict[str, Any] = {
             "bool": {
                 "must": [
@@ -156,10 +157,21 @@ class OpenSearchVectorStore:
         source_filter = self._filter(sources)
         if source_filter:
             query["bool"]["filter"] = source_filter
-        hits = self.client.search(index=self.index, body={"size": k, "query": query})
-        # BM25 scores are unbounded and not comparable to cosine, so they are
-        # used only for their *ranking* during fusion.
-        return [SearchHit(chunk=_to_chunk(h), score=float(h["_score"])) for h in hits["hits"]["hits"]]
+
+        # The stored vector comes back with each hit so its cosine similarity can
+        # be computed here. BM25 scores are unbounded and not comparable to
+        # cosine, so a keyword-only hit carrying its BM25 score would sail past
+        # any relevance cutoff downstream — an off-corpus question would come
+        # back "answered" purely because some chunk shared a word with it.
+        # BM25 still decides this list's *rank*; only the score is restated.
+        hits = self.client.search(
+            index=self.index,
+            body={"size": k, "query": query, "_source": {"excludes": []}},
+        )
+        return [
+            SearchHit(chunk=_to_chunk(h), score=_cosine(vector, h["_source"].get("embedding")))
+            for h in hits["hits"]["hits"]
+        ]
 
     def count(self) -> int:
         if not self.client.indices.exists(index=self.index):
@@ -180,6 +192,15 @@ def _cosine_from_score(score: float) -> float:
     return 2.0 * float(score) - 1.0
 
 
+def _cosine(query: Sequence[float], stored: Sequence[float] | None) -> float:
+    """Cosine similarity computed here, for hits whose score is not already one."""
+    if not stored:
+        return 0.0
+    dot = sum(a * b for a, b in zip(query, stored, strict=False))
+    norm = math.sqrt(sum(a * a for a in query)) * math.sqrt(sum(b * b for b in stored))
+    return dot / norm if norm else 0.0
+
+
 def _to_chunk(hit: dict[str, Any]) -> Chunk:
     src = hit["_source"]
     return Chunk(
@@ -198,18 +219,18 @@ def _fuse(primary: list[SearchHit], secondary: list[SearchHit], k: int) -> list[
 
     Fusing on *rank* rather than score sidesteps the fact that BM25 and cosine
     live on incomparable scales — there are no normalisation constants to tune,
-    and a chunk both rankings like beats one that a single ranking loves. The
-    surviving score stays the vector similarity, so relevance cutoffs downstream
-    keep their meaning.
+    and a chunk both rankings like beats one that a single ranking loves.
+
+    Both inputs carry cosine scores (see `_bm25`), so the surviving score means
+    the same thing whichever ranking a chunk arrived on, and relevance cutoffs
+    downstream keep working.
     """
     contribution: dict[str, float] = {}
     best: dict[str, SearchHit] = {}
     for ranking in (primary, secondary):
-        is_primary = ranking is primary
         for rank, hit in enumerate(ranking, start=1):
             cid = hit.chunk.id
             contribution[cid] = contribution.get(cid, 0.0) + 1.0 / (RRF_K + rank)
-            if cid not in best or is_primary:
-                best[cid] = hit
+            best.setdefault(cid, hit)
     ordered = sorted(contribution, key=lambda cid: contribution[cid], reverse=True)
     return [best[cid] for cid in ordered[:k]]

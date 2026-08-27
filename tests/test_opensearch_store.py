@@ -135,3 +135,22 @@ def test_hybrid_search_surfaces_an_exact_keyword_match(store):
 
 def test_empty_index_returns_nothing(store):
     assert store.search(QUERY, k=5) == []
+
+
+def test_keyword_only_hits_carry_cosine_not_bm25_scores(store):
+    """A keyword match must not smuggle an unbounded BM25 score past a cutoff.
+
+    The regression: an off-corpus question would come back "answered" because
+    some chunk happened to share a word with it, since BM25 scores run 5-15 and
+    clear any cosine threshold trivially.
+    """
+    _write(
+        store,
+        [_chunk("far", "jira", content="langchain orchestration notes")],
+        [_unit(89)],  # semantically distant from the query direction
+    )
+    hit = store.search(QUERY, k=5, query_text="langchain")[0]
+    assert hit.chunk.id == "far"
+    # Cosine of ~89 degrees, not a BM25 score.
+    assert hit.score == pytest.approx(math.cos(math.radians(89)), abs=0.02)
+    assert hit.score < 0.28  # would be filtered by the configured cutoff
