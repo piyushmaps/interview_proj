@@ -22,9 +22,13 @@ class Settings(BaseSettings):
     openai_embedding_model: str = "text-embedding-3-small"
     groq_api_key: str = ""
 
-    # LangGraph / LangSmith tracing
-    langgraph_api_key: str = ""
-    langsmith_api_key: str = ""
+    # --- tracing (Langfuse) ---
+    # Absent keys mean tracing is simply off; nothing else changes.
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    # Region-specific. Either name works; LANGFUSE_BASE_URL wins if both are set.
+    langfuse_host: str = ""
+    langfuse_base_url: str = ""
 
     # Slack connector
     slack_user_token: str = ""
@@ -89,6 +93,15 @@ class Settings(BaseSettings):
     pdf_pages_per_document: int = 50
     chunk_size: int = 800
     chunk_overlap: int = 120
+
+
+    @property
+    def langfuse_url(self) -> str:
+        return self.langfuse_base_url or self.langfuse_host or "https://cloud.langfuse.com"
+
+    @property
+    def tracing_enabled(self) -> bool:
+        return bool(self.langfuse_public_key and self.langfuse_secret_key)
 
 
 @lru_cache

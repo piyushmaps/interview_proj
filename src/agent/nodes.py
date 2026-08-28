@@ -11,6 +11,7 @@ from langchain_openai import ChatOpenAI
 from src.agent.state import AgentState
 from src.config import get_settings
 from src.models.document import SourceType
+from src.observability import record_retrieval, traced
 from src.retrieval.retriever import SourceRetriever
 
 VALID_SOURCES = {s.value for s in SourceType}
@@ -76,8 +77,19 @@ def retrieve_evidence(state: AgentState, retriever: SourceRetriever) -> AgentSta
     sub_queries = state.get("sub_queries") or [state["question"]]
 
     # Sub-queries are independent, I/O-bound searches — run them concurrently.
-    with ThreadPoolExecutor(max_workers=min(len(sub_queries), 4) or 1) as pool:
-        per_query = list(pool.map(lambda q: retriever.retrieve(q, sources=sources), sub_queries))
+    with traced("retrieve", as_type="span", input={"sub_queries": sub_queries, "sources": sources}):
+        with ThreadPoolExecutor(max_workers=min(len(sub_queries), 4) or 1) as pool:
+            per_query = list(pool.map(lambda q: retriever.retrieve(q, sources=sources), sub_queries))
+
+        # Recorded here rather than inside the worker threads: tracing context
+        # does not cross a thread boundary, and the data is what matters, not
+        # which thread produced it.
+        for sub_query, chunks in zip(sub_queries, per_query, strict=True):
+            with traced(f"search: {sub_query[:60]}", as_type="retriever"):
+                record_retrieval(
+                    sub_query, sources, chunks,
+                    min_similarity=getattr(retriever, "min_similarity", None),
+                )
 
     # Dedupe in sub-query order so output stays stable regardless of completion order.
     seen: set[tuple[str, str]] = set()

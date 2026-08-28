@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from src.agent.graph import run_agent
 from src.config import get_settings
+from src.observability import is_tracing_enabled, setup_tracing
 from src.retrieval.retriever import SourceRetriever
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ async def lifespan(_: FastAPI):
     settings = get_settings()
     logging.basicConfig(level=settings.log_level)
     logging.getLogger("faiss.loader").setLevel(logging.WARNING)
+    setup_tracing(settings)
     try:
         _retriever = SourceRetriever()
         _chunk_count = _retriever.store.count()
@@ -66,6 +68,7 @@ def health() -> dict[str, Any]:
         "vector_store": settings.vector_store,
         "chunks": _chunk_count,
         "index": "ready" if _retriever and _chunk_count else "empty or unavailable",
+        "tracing": "on" if is_tracing_enabled() else "off",
     }
 
 

@@ -9,6 +9,7 @@ from langgraph.graph import END, START, StateGraph
 
 from src.agent.nodes import retrieve_evidence, route_sources, synthesize_answer
 from src.agent.state import AgentState
+from src.observability import langfuse_callbacks
 from src.retrieval.retriever import SourceRetriever
 
 
@@ -31,7 +32,12 @@ def build_agent(retriever: SourceRetriever | None = None):
 
 def run_agent(question: str, retriever: SourceRetriever | None = None) -> dict[str, Any]:
     agent = build_agent(retriever)
-    result = agent.invoke({"question": question})
+    # The callbacks are what make the routing and synthesis LLM calls show up as
+    # spans, with their prompts and token counts. Empty list when tracing is off.
+    result = agent.invoke(
+        {"question": question},
+        config={"callbacks": langfuse_callbacks(), "run_name": "ask"},
+    )
     return {
         "question": question,
         "answer": result.get("answer", ""),
