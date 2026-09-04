@@ -11,6 +11,14 @@ ChatGPT-style agentic RAG over multi-source capability documentation:
 
 The agent **routes** to the right sources, **decomposes** multi-part questions, **retrieves in parallel**, and **synthesizes** citation-backed answers.
 
+## Learning the codebase
+
+A chapter-by-chapter walkthrough of the whole system, in the order the data
+moves, is in [`docs/walkthrough/`](docs/walkthrough/README.md). It reads the real
+code line by line and explains the background ideas (generators, protocols,
+embeddings, cosine similarity) as they come up. `HOW_IT_WORKS.md` is the
+long-form design narrative; the walkthrough is the guided tour of the code.
+
 ## Roadmap phases
 
 | Phase | Status | What |
