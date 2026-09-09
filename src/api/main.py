@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from src.agent.graph import run_agent
+from src.api.cache import AnswerCache
 from src.config import get_settings
 from src.observability import is_tracing_enabled, setup_tracing
 from src.retrieval.retriever import SourceRetriever
@@ -18,15 +19,26 @@ logger = logging.getLogger(__name__)
 
 _retriever: SourceRetriever | None = None
 _chunk_count = 0
+_cache: AnswerCache | None = None
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global _retriever, _chunk_count
+    global _retriever, _chunk_count, _cache
     settings = get_settings()
     logging.basicConfig(level=settings.log_level)
     logging.getLogger("faiss.loader").setLevel(logging.WARNING)
     setup_tracing(settings)
+    if settings.cache_enabled:
+        _cache = AnswerCache(
+            max_entries=settings.cache_max_entries,
+            ttl_seconds=settings.cache_ttl_seconds,
+            similarity=settings.cache_similarity,
+        )
+        logger.info(
+            "answer cache on (%d entries, %.0fs ttl, %.2f similarity)",
+            settings.cache_max_entries, settings.cache_ttl_seconds, settings.cache_similarity,
+        )
     try:
         _retriever = SourceRetriever()
         _chunk_count = _retriever.store.count()
@@ -69,6 +81,7 @@ def health() -> dict[str, Any]:
         "chunks": _chunk_count,
         "index": "ready" if _retriever and _chunk_count else "empty or unavailable",
         "tracing": "on" if is_tracing_enabled() else "off",
+        "cache": _cache.stats.as_dict() | {"entries": len(_cache)} if _cache else "off",
     }
 
 
@@ -79,8 +92,37 @@ def ask(body: AskRequest) -> AskResponse:
             status_code=503,
             detail="Vector store unavailable or empty. Run: python -m src.ingestion.pipeline",
         )
-    result = run_agent(body.question, retriever=_retriever)
+    question = body.question
+
+    if _cache is None:
+        return AskResponse(**run_agent(question, retriever=_retriever))
+
+    # Embedding the question here is not extra work in spirit — retrieval needs
+    # it anyway on a miss — and it is what lets "who owns Payments" hit the
+    # entry stored for "who owns the Payments capability".
+    try:
+        vector = _retriever.embeddings.embed_query(question)
+    except Exception as exc:  # noqa: BLE001 - a cache must never fail a request
+        logger.warning("could not embed for cache lookup (%s); serving uncached", exc)
+        return AskResponse(**run_agent(question, retriever=_retriever))
+
+    cached = _cache.get(question, vector)
+    if cached is not None:
+        return AskResponse(**cached)
+
+    result = run_agent(question, retriever=_retriever)
+    _cache.put(question, vector, result)
     return AskResponse(**result)
+
+
+@app.post("/cache/clear")
+def clear_cache() -> dict[str, str]:
+    """Drop cached answers. Call after re-ingestion, since entries were built
+    against the previous index."""
+    if _cache is None:
+        return {"status": "cache is disabled"}
+    _cache.clear()
+    return {"status": "cleared"}
 
 
 def run() -> None:

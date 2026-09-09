@@ -67,6 +67,19 @@ class Settings(BaseSettings):
     app_port: int = 8000
     log_level: str = "INFO"
 
+    # --- answer cache ---
+    # The same questions repeat constantly in an internal assistant; a hit
+    # costs nothing where a miss costs two LLM calls and ~3 seconds.
+    cache_enabled: bool = True
+    cache_max_entries: int = 2000
+    # Keep below the ingestion interval so staleness is bounded by design.
+    cache_ttl_seconds: float = 900.0
+    # Cosine above which two questions are treated as the same question.
+    # Measured, not guessed: rephrasings of one question score 0.82-0.87, while
+    # questions about different capabilities top out at 0.65. A wrong hit is a
+    # wrong answer, so the threshold sits above that ceiling, not near it.
+    cache_similarity: float = 0.75
+
     # Retrieval defaults
     top_k: int = 6
     # Max L2 distance for a chunk to count as relevant. Measured on the sample
