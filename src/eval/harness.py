@@ -27,6 +27,7 @@ from typing import Any
 from src.agent.graph import run_agent
 from src.agent.nodes import VALID_SOURCES, synthesize_answer
 from src.config import ROOT_DIR
+from src.eval.judge import Verdict, judge_answer
 from src.retrieval.retriever import SourceRetriever
 
 GOLDEN_PATH = ROOT_DIR / "data" / "eval" / "golden.json"
@@ -60,6 +61,7 @@ class Result:
     facts_hit: list[str] = field(default_factory=list)
     facts_missed: list[str] = field(default_factory=list)
     n_citations: int = 0
+    verdict: Verdict | None = None
 
     @property
     def routing_recall(self) -> float:
@@ -83,7 +85,9 @@ def _score_facts(result: Result, must_mention: list[str]) -> None:
         (result.facts_hit if mentions(result.answer, fact) else result.facts_missed).append(fact)
 
 
-def evaluate(golden: list[dict[str, Any]], retriever: SourceRetriever) -> list[Result]:
+def evaluate(
+    golden: list[dict[str, Any]], retriever: SourceRetriever, judge: bool = False
+) -> list[Result]:
     results: list[Result] = []
     for item in golden:
         out = run_agent(item["question"], retriever=retriever)
@@ -96,6 +100,13 @@ def evaluate(golden: list[dict[str, Any]], retriever: SourceRetriever) -> list[R
             n_citations=len(out.get("citations") or []),
         )
         _score_facts(r, item.get("must_mention") or [])
+        if judge:
+            # Judged against the evidence the model actually saw, so a low
+            # score means invention rather than bad retrieval.
+            evidence = [c.content for c in retriever.retrieve(
+                item["question"], sources=out.get("selected_sources")
+            )]
+            r.verdict = judge_answer(item["question"], evidence, r.answer)
         results.append(r)
     return results
 
@@ -155,11 +166,21 @@ def report(results: list[Result], label: str = "AGENT") -> None:
     print(f"  routing precision : {_mean([r.routing_precision for r in results]):.2f}")
     print(f"  routing exact     : {sum(r.routing_exact for r in results)}/{len(results)}")
     print(f"  fact recall       : {fact_recall(results):.2f}")
+    judged = [r for r in results if r.verdict is not None]
+    if judged:
+        mean = sum(r.verdict.score for r in judged) / len(judged)
+        ungrounded = [r for r in judged if not r.verdict.grounded]
+        print(f"  groundedness      : {mean:.2f} "
+              f"({len(judged) - len(ungrounded)}/{len(judged)} fully grounded)")
+        for r in ungrounded:
+            print(f"      {r.qid}: {r.verdict}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Score the agent against the golden set.")
     parser.add_argument("--golden", type=Path, default=GOLDEN_PATH)
+    parser.add_argument("--judge", action="store_true",
+                        help="score each answer for groundedness against its evidence")
     parser.add_argument("--baseline", action="store_true",
                         help="also score plain RAG (no routing) for comparison")
     parser.add_argument("--fail-under", type=float, default=None,
@@ -169,7 +190,7 @@ def main() -> None:
     golden = json.loads(args.golden.read_text(encoding="utf-8"))
     retriever = SourceRetriever()
 
-    results = evaluate(golden, retriever)
+    results = evaluate(golden, retriever, judge=args.judge)
     report(results, "AGENT (route -> retrieve -> synthesize)")
 
     if args.baseline:

@@ -19,6 +19,9 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
+    # Model that scores groundedness. Blank falls back to openai_model; a
+    # stronger judge than the generator is often worth the cost.
+    judge_model: str = ""
     openai_embedding_model: str = "text-embedding-3-small"
     groq_api_key: str = ""
 
