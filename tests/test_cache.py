@@ -10,6 +10,7 @@ import pytest
 
 from src.api.cache import AnswerCache
 
+
 # Unit vectors at known angles, so similarity is exact rather than approximate.
 def _unit(deg: float) -> list[float]:
     r = math.radians(deg)
