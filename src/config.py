@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     opensearch_timeout: int = 60
     # HNSW breadth at query time: higher is more accurate and slower.
     opensearch_ef_search: int = 100
+    # Connections kept open to OpenSearch. The client default keeps one, so
+    # every simultaneous search beyond the first opened a fresh connection
+    # and threw it away afterwards.
+    opensearch_pool_size: int = 32
 
     # Fuse keyword (BM25) and vector rankings. Pure semantic search misses exact
     # tokens — ticket keys, error strings, column names. OpenSearch only.

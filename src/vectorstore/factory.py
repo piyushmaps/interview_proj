@@ -46,6 +46,7 @@ def _opensearch(settings: Settings) -> VectorStore:
         timeout=settings.opensearch_timeout,
         max_retries=3,
         retry_on_timeout=True,
+        pool_maxsize=settings.opensearch_pool_size,
     )
     return OpenSearchVectorStore(
         client,
