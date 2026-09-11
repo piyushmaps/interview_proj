@@ -1,10 +1,19 @@
-"""Agent nodes: route → retrieve → synthesize."""
+"""Agent nodes: route → retrieve → synthesize.
+
+Each node exists twice: a synchronous version for the evaluation harness and
+scripts, and an asynchronous one for the API. They share every piece of logic
+that is not the call itself — prompt building, parsing, deduplication, citation
+filtering — so the two cannot drift apart. The only difference between a pair
+is `invoke` versus `await ainvoke`.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from langchain_openai import ChatOpenAI
 
@@ -12,9 +21,14 @@ from src.agent.state import AgentState
 from src.config import get_settings
 from src.models.document import SourceType
 from src.observability import record_retrieval, traced
-from src.retrieval.retriever import SourceRetriever
+from src.retrieval.retriever import RetrievedChunk, SourceRetriever
 
 VALID_SOURCES = {s.value for s in SourceType}
+
+REFUSAL = (
+    "I couldn't find relevant evidence in Jira, Slack, DevPortal, or the city map. "
+    "Try rephrasing or asking about capability creation, ownership, or open tickets."
+)
 
 
 def _llm() -> ChatOpenAI:
@@ -26,10 +40,15 @@ def _llm() -> ChatOpenAI:
     )
 
 
-def route_sources(state: AgentState) -> AgentState:
-    """Decide which sources to query and optional sub-queries."""
-    question = state["question"]
-    prompt = f"""You are a routing layer for an internal knowledge agent.
+def _text(content: Any) -> str:
+    return content if isinstance(content, str) else str(content)
+
+
+# -- route --------------------------------------------------------------------
+
+
+def _routing_prompt(question: str) -> str:
+    return f"""You are a routing layer for an internal knowledge agent.
 Available sources:
 - jira: tickets, decisions, open work
 - slack: tribal Q&A, how-tos from engineers
@@ -52,88 +71,109 @@ Rules:
 - Tickets / status / open work → include jira.
 - If unsure, include devportal + city_map.
 """
-    raw = _llm().invoke(prompt).content
-    parsed = _parse_json(raw if isinstance(raw, str) else str(raw))
 
+
+def _apply_routing(state: AgentState, raw: Any) -> AgentState:
+    """Turn the router's reply into state. Never trusts it as a control signal:
+    unknown sources are dropped, and an unusable reply falls back to a default."""
+    parsed = _parse_json(_text(raw))
     sources = [s for s in parsed.get("sources", []) if s in VALID_SOURCES]
-    if not sources:
-        sources = ["devportal", "city_map"]
-
-    sub_queries = parsed.get("sub_queries") or [question]
-    if not sub_queries:
-        sub_queries = [question]
-
     return {
         **state,
-        "selected_sources": sources,
-        "sub_queries": sub_queries,
+        "selected_sources": sources or ["devportal", "city_map"],
+        "sub_queries": parsed.get("sub_queries") or [state["question"]],
         "routing_rationale": parsed.get("rationale", ""),
     }
 
 
-def retrieve_evidence(state: AgentState, retriever: SourceRetriever) -> AgentState:
-    """Retrieve concurrently across sub-queries, filtered to selected sources."""
-    sources = state.get("selected_sources") or list(VALID_SOURCES)
-    sub_queries = state.get("sub_queries") or [state["question"]]
+def route_sources(state: AgentState) -> AgentState:
+    """Decide which sources to query and optional sub-queries."""
+    return _apply_routing(state, _llm().invoke(_routing_prompt(state["question"])).content)
 
-    # Sub-queries are independent, I/O-bound searches — run them concurrently.
-    with traced("retrieve", as_type="span", input={"sub_queries": sub_queries, "sources": sources}):
-        with ThreadPoolExecutor(max_workers=min(len(sub_queries), 4) or 1) as pool:
-            per_query = list(pool.map(lambda q: retriever.retrieve(q, sources=sources), sub_queries))
 
-        # Recorded here rather than inside the worker threads: tracing context
-        # does not cross a thread boundary, and the data is what matters, not
-        # which thread produced it.
-        for sub_query, chunks in zip(sub_queries, per_query, strict=True):
-            with traced(f"search: {sub_query[:60]}", as_type="retriever"):
-                record_retrieval(
-                    sub_query, sources, chunks,
-                    min_similarity=getattr(retriever, "min_similarity", None),
-                )
+async def aroute_sources(state: AgentState) -> AgentState:
+    message = await _llm().ainvoke(_routing_prompt(state["question"]))
+    return _apply_routing(state, message.content)
 
-    # Dedupe in sub-query order so output stays stable regardless of completion order.
+
+# -- retrieve -----------------------------------------------------------------
+
+
+def _retrieval_plan(state: AgentState) -> tuple[list[str], list[str]]:
+    return (
+        state.get("selected_sources") or list(VALID_SOURCES),
+        state.get("sub_queries") or [state["question"]],
+    )
+
+
+def _record(
+    sub_queries: list[str],
+    per_query: list[list[RetrievedChunk]],
+    sources: list[str],
+    retriever: SourceRetriever,
+) -> None:
+    # Recorded after the searches return rather than inside them: tracing
+    # context does not cross a thread boundary, and the data is what matters,
+    # not which thread produced it.
+    for sub_query, chunks in zip(sub_queries, per_query, strict=True):
+        with traced(f"search: {sub_query[:60]}", as_type="retriever"):
+            record_retrieval(
+                sub_query, sources, chunks,
+                min_similarity=getattr(retriever, "min_similarity", None),
+            )
+
+
+def _dedupe(per_query: list[list[RetrievedChunk]]) -> list[RetrievedChunk]:
+    """Merge in sub-query order, so output is stable whatever finished first."""
     seen: set[tuple[str, str]] = set()
-    retrieved = []
+    merged: list[RetrievedChunk] = []
     for chunks in per_query:
         for chunk in chunks:
             key = (chunk.url, chunk.content[:120])
-            if key in seen:
-                continue
-            seen.add(key)
-            retrieved.append(chunk)
-
-    return {**state, "retrieved": retrieved}
+            if key not in seen:
+                seen.add(key)
+                merged.append(chunk)
+    return merged
 
 
-def synthesize_answer(state: AgentState) -> AgentState:
-    """Grounded answer with citations."""
-    chunks = state.get("retrieved") or []
-    if not chunks:
-        return {
-            **state,
-            "answer": (
-                "I couldn't find relevant evidence in Jira, Slack, DevPortal, or the city map. "
-                "Try rephrasing or asking about capability creation, ownership, or open tickets."
-            ),
-            "citations": [],
-        }
+def retrieve_evidence(state: AgentState, retriever: SourceRetriever) -> AgentState:
+    """Retrieve concurrently across sub-queries, filtered to selected sources."""
+    sources, sub_queries = _retrieval_plan(state)
+    with traced("retrieve", as_type="span", input={"sub_queries": sub_queries, "sources": sources}):
+        # Sub-queries are independent, input/output-bound searches.
+        with ThreadPoolExecutor(max_workers=min(len(sub_queries), 4) or 1) as pool:
+            per_query = list(pool.map(lambda q: retriever.retrieve(q, sources=sources), sub_queries))
+        _record(sub_queries, per_query, sources, retriever)
+    return {**state, "retrieved": _dedupe(per_query)}
 
-    evidence_blocks = []
-    citations = []
-    for i, chunk in enumerate(chunks, start=1):
-        evidence_blocks.append(
+
+async def aretrieve_evidence(state: AgentState, retriever: SourceRetriever) -> AgentState:
+    sources, sub_queries = _retrieval_plan(state)
+    with traced("retrieve", as_type="span", input={"sub_queries": sub_queries, "sources": sources}):
+        # Same concurrency as the thread pool above, without a thread per search.
+        per_query = list(
+            await asyncio.gather(*(retriever.aretrieve(q, sources=sources) for q in sub_queries))
+        )
+        _record(sub_queries, per_query, sources, retriever)
+    return {**state, "retrieved": _dedupe(per_query)}
+
+
+# -- synthesize ---------------------------------------------------------------
+
+
+def _evidence_prompt(state: AgentState) -> tuple[str, list[dict[str, Any]]]:
+    """The synthesis prompt, and the full citation list it numbers."""
+    blocks: list[str] = []
+    citations: list[dict[str, Any]] = []
+    for i, chunk in enumerate(state["retrieved"], start=1):
+        blocks.append(
             f"[{i}] source={chunk.source} title={chunk.title}\nurl={chunk.url}\n{chunk.content}"
         )
         citations.append(
-            {
-                "index": i,
-                "source": chunk.source,
-                "title": chunk.title,
-                "url": chunk.url,
-            }
+            {"index": i, "source": chunk.source, "title": chunk.title, "url": chunk.url}
         )
 
-    evidence = "\n\n".join(evidence_blocks)
+    evidence = "\n\n".join(blocks)
     prompt = f"""You are Intuit Assist, an internal engineering knowledge agent.
 Answer using ONLY the evidence below. Cite sources as [1], [2], etc.
 If evidence conflicts, prefer DevPortal over Slack, and city map for ownership facts.
@@ -149,18 +189,39 @@ Evidence:
 
 Answer:
 """
-    answer = _llm().invoke(prompt).content
-    answer_text = answer if isinstance(answer, str) else str(answer)
+    return prompt, citations
 
-    # Return the evidence the answer actually cites, not everything retrieved —
-    # otherwise a two-source answer renders top_k citation links. Keep the
-    # original indices so [n] markers in the text still resolve. If the model
-    # cited nothing, fall back to the full set rather than showing none.
-    cited = {int(n) for n in re.findall(r"\[(\d+)\]", answer_text)}
-    if cited:
-        citations = [c for c in citations if c["index"] in cited]
 
-    return {**state, "answer": answer_text, "citations": citations}
+def _cited_only(answer: str, citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The evidence the answer actually cites, not everything retrieved —
+    otherwise a two-source answer renders top_k links. Original indices are
+    kept so [n] markers still resolve. If nothing was cited, show everything
+    rather than nothing."""
+    cited = {int(n) for n in re.findall(r"\[(\d+)\]", answer)}
+    return [c for c in citations if c["index"] in cited] if cited else citations
+
+
+def _refused(state: AgentState) -> AgentState:
+    # No evidence cleared the relevance cutoff, so the model is never called:
+    # there is nothing for it to answer from, and nothing to hallucinate with.
+    return {**state, "answer": REFUSAL, "citations": []}
+
+
+def synthesize_answer(state: AgentState) -> AgentState:
+    """Grounded answer with citations."""
+    if not state.get("retrieved"):
+        return _refused(state)
+    prompt, citations = _evidence_prompt(state)
+    answer = _text(_llm().invoke(prompt).content)
+    return {**state, "answer": answer, "citations": _cited_only(answer, citations)}
+
+
+async def asynthesize_answer(state: AgentState) -> AgentState:
+    if not state.get("retrieved"):
+        return _refused(state)
+    prompt, citations = _evidence_prompt(state)
+    answer = _text((await _llm().ainvoke(prompt)).content)
+    return {**state, "answer": answer, "citations": _cited_only(answer, citations)}
 
 
 def _parse_json(text: str) -> dict:

@@ -1,15 +1,28 @@
-"""FastAPI entrypoint for the knowledge agent."""
+"""FastAPI entrypoint for the knowledge agent.
+
+Both question endpoints are asynchronous. A request spends nearly all its time
+waiting — on the router model, the embedding service, the vector store, the
+answer model — and an asynchronous handler waits without holding a worker
+thread. That is what lets one process carry many requests at once, instead of
+queueing everything past its thread-pool size.
+
+`/ask` returns the finished answer. `/ask/stream` returns the same answer as it
+is being written, as server-sent events.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.agent.graph import run_agent
+from src.agent.graph import arun_agent, astream_agent
 from src.api.cache import AnswerCache
 from src.config import get_settings
 from src.observability import is_tracing_enabled, setup_tracing
@@ -85,34 +98,106 @@ def health() -> dict[str, Any]:
     }
 
 
-@app.post("/ask", response_model=AskResponse)
-def ask(body: AskRequest) -> AskResponse:
+def _require_retriever() -> SourceRetriever:
     if _retriever is None:
         raise HTTPException(
             status_code=503,
             detail="Vector store unavailable or empty. Run: python -m src.ingestion.pipeline",
         )
-    question = body.question
+    return _retriever
 
+
+async def _cache_lookup(
+    retriever: SourceRetriever, question: str
+) -> tuple[Sequence[float] | None, dict[str, Any] | None]:
+    """Embed the question and check the cache. Returns (vector, cached answer).
+
+    The embedding is what lets "who owns Payments" reuse the entry stored for
+    "who owns the Payments capability". A cache must never fail a request, so
+    an embedding error means serving uncached, not an error.
+
+    Reading and writing the cache needs no lock on this path: every request
+    runs on one event loop, and `get`/`put` contain no `await`, so two requests
+    can never be inside them at the same moment.
+    """
     if _cache is None:
-        return AskResponse(**run_agent(question, retriever=_retriever))
-
-    # Embedding the question here is not extra work in spirit — retrieval needs
-    # it anyway on a miss — and it is what lets "who owns Payments" hit the
-    # entry stored for "who owns the Payments capability".
+        return None, None
     try:
-        vector = _retriever.embeddings.embed_query(question)
-    except Exception as exc:  # noqa: BLE001 - a cache must never fail a request
+        vector = await retriever.embeddings.aembed_query(question)
+    except Exception as exc:  # noqa: BLE001
         logger.warning("could not embed for cache lookup (%s); serving uncached", exc)
-        return AskResponse(**run_agent(question, retriever=_retriever))
+        return None, None
+    return vector, _cache.get(question, vector)
 
-    cached = _cache.get(question, vector)
+
+def _remember(question: str, vector: Sequence[float] | None, result: dict[str, Any]) -> None:
+    if _cache is not None and vector is not None:
+        _cache.put(question, vector, result)
+
+
+@app.post("/ask", response_model=AskResponse)
+async def ask(body: AskRequest) -> AskResponse:
+    retriever = _require_retriever()
+    vector, cached = await _cache_lookup(retriever, body.question)
     if cached is not None:
         return AskResponse(**cached)
-
-    result = run_agent(question, retriever=_retriever)
-    _cache.put(question, vector, result)
+    result = await arun_agent(body.question, retriever=retriever)
+    _remember(body.question, vector, result)
     return AskResponse(**result)
+
+
+def _event(name: str, data: dict[str, Any]) -> str:
+    """One server-sent event: a named event line, a data line, a blank line."""
+    return f"event: {name}\ndata: {json.dumps(data)}\n\n"
+
+
+async def _answer_events(question: str, retriever: SourceRetriever) -> AsyncIterator[str]:
+    """The answer as a stream of events, in this order:
+
+        status   work has started              — arrives immediately
+        status   sources chosen, searching
+        status   evidence found, writing
+        token    a piece of the answer         — repeated, as it is written
+        done     the full result, with citations
+
+    Citations come last on purpose. Which evidence the answer used is only known
+    once the answer is finished, so they cannot be sent any earlier.
+    """
+    try:
+        yield _event("status", {"stage": "started"})
+
+        vector, cached = await _cache_lookup(retriever, question)
+        if cached is not None:
+            yield _event("token", {"text": cached["answer"]})
+            yield _event("done", {**cached, "cached": True})
+            return
+
+        async for kind, data in astream_agent(question, retriever=retriever):
+            if kind == "routed":
+                yield _event("status", {"stage": "searching", **data})
+            elif kind == "retrieved":
+                yield _event("status", {"stage": "writing", **data})
+            elif kind == "token":
+                yield _event("token", {"text": data})
+            elif kind == "done":
+                _remember(question, vector, data)
+                yield _event("done", {**data, "cached": False})
+    except Exception as exc:
+        # The response headers have already gone out with a 200, so the status
+        # code can no longer change. The failure has to travel inside the stream.
+        logger.exception("streamed answer failed")
+        yield _event("error", {"message": str(exc)})
+
+
+@app.post("/ask/stream")
+async def ask_stream(body: AskRequest) -> StreamingResponse:
+    retriever = _require_retriever()
+    return StreamingResponse(
+        _answer_events(body.question, retriever),
+        media_type="text/event-stream",
+        # Stop proxies from buffering the stream, which would defeat the point.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/cache/clear")

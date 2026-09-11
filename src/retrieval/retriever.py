@@ -10,6 +10,7 @@ neighbours that are near in rank but far in meaning.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -58,19 +59,46 @@ class SourceRetriever:
         it. -2.0 is the sentinel for "use the default" because it sits below the
         cosine range, so it can never be mistaken for a real threshold.
         """
+        k, min_similarity, source_values = self._resolve(k, min_similarity, sources)
+        vector = self.embeddings.embed_query(query)
+        hits = self.store.search(vector, k=k, sources=source_values, query_text=query)
+        return self._finish(hits, min_similarity)
+
+    async def aretrieve(
+        self,
+        query: str,
+        sources: Iterable[SourceType] | Iterable[str] | None = None,
+        k: int | None = None,
+        min_similarity: float | None = -2.0,
+    ) -> list[RetrievedChunk]:
+        """`retrieve` for the asynchronous API path.
+
+        The embedding call is natively asynchronous. The vector store interface
+        is not, so the search runs on a worker thread — without that, each
+        OpenSearch round trip would freeze every other request sharing the event
+        loop. A native asynchronous OpenSearch client is the complete fix; this
+        is the correct one for a synchronous interface.
+        """
+        k, min_similarity, source_values = self._resolve(k, min_similarity, sources)
+        vector = await self.embeddings.aembed_query(query)
+        hits = await asyncio.to_thread(
+            self.store.search, vector, k=k, sources=source_values, query_text=query
+        )
+        return self._finish(hits, min_similarity)
+
+    def _resolve(self, k, min_similarity, sources):
         k = k or self.top_k
         if min_similarity == -2.0:
             min_similarity = self.min_similarity
-
         source_values = (
             [s.value if isinstance(s, SourceType) else str(s) for s in sources]
             if sources
             else None
         )
+        return k, min_similarity, source_values
 
-        vector = self.embeddings.embed_query(query)
-        hits = self.store.search(vector, k=k, sources=source_values, query_text=query)
-
+    @staticmethod
+    def _finish(hits, min_similarity: float | None) -> list[RetrievedChunk]:
         # A vector index has no notion of "no match" — it returns the k nearest
         # neighbours however distant. Without this, an off-corpus question comes
         # back with a full set of citations that support nothing.
