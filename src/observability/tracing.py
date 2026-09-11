@@ -83,7 +83,14 @@ def langfuse_callbacks() -> list[Any]:
     try:
         from langfuse.langchain import CallbackHandler
 
-        return [CallbackHandler()]
+        handler = CallbackHandler()
+        # Run in the caller's own context, not on a worker thread. On the
+        # asynchronous path LangChain otherwise hands a synchronous handler to a
+        # thread; the span it opens never becomes "current" for the code that
+        # follows, and retrieval spans land in a separate, orphaned trace.
+        # Measured: two traces per request without this, one with it.
+        handler.run_inline = True
+        return [handler]
     except Exception as exc:  # noqa: BLE001
         logger.warning("Langfuse callback unavailable: %s", exc)
         return []
@@ -91,15 +98,24 @@ def langfuse_callbacks() -> list[Any]:
 
 @contextlib.contextmanager
 def traced(name: str, as_type: str = "span", **fields: Any) -> Iterator[None]:
-    """Wrap a block as one span. A plain no-op when tracing is off."""
+    """Wrap a block as one span. A plain no-op when tracing is off.
+
+    Only a failure to *start* the span is swallowed. An error raised by the
+    wrapped code must reach the caller unchanged — catching it here and
+    yielding a second time would turn it into a confusing RuntimeError and
+    hide the real cause.
+    """
     if not _enabled or _client is None:
         yield
         return
+    span = contextlib.ExitStack()
     try:
-        with _client.start_as_current_observation(name=name, as_type=as_type, **fields):
-            yield
+        span.enter_context(
+            _client.start_as_current_observation(name=name, as_type=as_type, **fields)
+        )
     except Exception as exc:  # noqa: BLE001 - never let a trace break the request
-        logger.debug("span %r failed: %s", name, exc)
+        logger.debug("span %r could not start: %s", name, exc)
+    with span:
         yield
 
 

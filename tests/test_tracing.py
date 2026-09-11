@@ -77,3 +77,47 @@ def test_settings_prefer_base_url_over_host(monkeypatch):
     monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
     get_settings.cache_clear()
     assert get_settings().langfuse_url == "https://us.cloud.langfuse.com"
+
+
+class _FakeLangfuse:
+    def start_as_current_observation(self, **_: object):
+        import contextlib
+        return contextlib.nullcontext()
+
+
+def test_an_error_inside_a_span_reaches_the_caller_unchanged(monkeypatch):
+    """The regression: traced() caught the wrapped code's exception and yielded
+    a second time, which Python turns into a RuntimeError — hiding the real
+    cause behind a confusing one."""
+    monkeypatch.setattr(tracing, "_enabled", True)
+    monkeypatch.setattr(tracing, "_client", _FakeLangfuse())
+    with pytest.raises(ValueError, match="the real error"), tracing.traced("retrieve"):
+        raise ValueError("the real error")
+
+
+def test_a_span_that_cannot_start_does_not_block_the_work(monkeypatch):
+    class Broken:
+        def start_as_current_observation(self, **_: object):
+            raise RuntimeError("langfuse is down")
+
+    monkeypatch.setattr(tracing, "_enabled", True)
+    monkeypatch.setattr(tracing, "_client", Broken())
+    ran = False
+    with tracing.traced("retrieve"):
+        ran = True
+    assert ran
+
+
+def test_callback_handlers_run_inline(monkeypatch):
+    """The regression: on the asynchronous path LangChain hands a non-inline
+    handler to a worker thread, so the span it opens never becomes current for
+    the node that follows — and retrieval spans land in an orphaned trace."""
+
+    class FakeHandler:
+        run_inline = False
+
+    monkeypatch.setattr("langfuse.langchain.CallbackHandler", FakeHandler)
+    monkeypatch.setattr(tracing, "_enabled", True)
+    handlers = tracing.langfuse_callbacks()
+    assert handlers
+    assert all(h.run_inline for h in handlers)
