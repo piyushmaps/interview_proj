@@ -127,7 +127,7 @@ async def _cache_lookup(
     except Exception as exc:  # noqa: BLE001
         logger.warning("could not embed for cache lookup (%s); serving uncached", exc)
         return None, None
-    return vector, _cache.get(question, vector)
+    return vector, _cache.get(question, vector) #caching question vector compare with the already presnt question
 
 
 def _remember(question: str, vector: Sequence[float] | None, result: dict[str, Any]) -> None:

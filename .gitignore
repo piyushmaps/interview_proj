@@ -58,3 +58,8 @@ data/sample/city_map/*.json
 
 # Ingestion state (rebuilt by re-running the pipeline)
 data/index/
+
+# Duplicate documentation exports and temporary rendering/Office files
+/docs.zip
+/docs/interview-prep/render*/
+~$*

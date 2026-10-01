@@ -13,6 +13,16 @@ The agent **routes** to the right sources, **decomposes** multi-part questions, 
 
 ## Learning the codebase
 
+New to the project? Start with the [plain-language workflow](docs/workflow.md).
+It follows one employee question through six named parts and explains how Jira,
+Slack, documents, LangGraph and guardrails fit together.
+
+Next read the [HLD](docs/architecture/high-level-design.md) for the main parts,
+then the [LLD](docs/architecture/low-level-design.md) to open each of those same
+parts and understand its functions. Names and letters match across all three pages.
+The [architecture index](docs/architecture/README.md) also links to the detailed
+engineering references. These describe the proposed redesign, not implemented features.
+
 A chapter-by-chapter walkthrough of the whole system, in the order the data
 moves, is in [`docs/walkthrough/`](docs/walkthrough/README.md). It reads the real
 code line by line and explains the background ideas (generators, protocols,
