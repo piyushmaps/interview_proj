@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Web Request with Redis Cache-Aside",
+    "output": ".archify/sequence-cache-miss-20261003-151755/web-request-cache-miss.html",
+    "column_fit": "spread",
+    "quality_profile": "showcase",
+    "viewBox": [
+      920,
+      520
+    ],
+    "legend": {
+      "entries": {
+        "emphasis": {
+          "label": "request / query"
+        },
+        "dashed": {
+          "label": "cache fill"
+        },
+        "default": {
+          "label": "cache read"
+        }
+      }
+    }
+  },
+  "participants": [
+    {
+      "id": "browser",
+      "type": "frontend",
+      "label": "Browser",
+      "sublabel": "client"
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "API",
+      "sublabel": "request handler"
+    },
+    {
+      "id": "redis",
+      "type": "database",
+      "label": "Redis",
+      "sublabel": "cache"
+    },
+    {
+      "id": "postgres",
+      "type": "database",
+      "label": "PostgreSQL",
+      "sublabel": "source of truth"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 245,
+      "label": "Cache check"
+    },
+    {
+      "from": 255,
+      "to": 370,
+      "label": "Miss: load + fill"
+    },
+    {
+      "from": 380,
+      "to": 420,
+      "label": "Respond"
+    }
+  ],
+  "messages": [
+    {
+      "id": "http-request",
+      "from": "browser",
+      "to": "api",
+      "y": 165,
+      "label": "GET /resource",
+      "variant": "emphasis"
+    },
+    {
+      "id": "cache-get",
+      "from": "api",
+      "to": "redis",
+      "y": 195,
+      "label": "GET key",
+      "variant": "default"
+    },
+    {
+      "id": "cache-miss",
+      "from": "redis",
+      "to": "api",
+      "y": 228,
+      "label": "nil (miss)",
+      "variant": "return"
+    },
+    {
+      "id": "db-query",
+      "from": "api",
+      "to": "postgres",
+      "y": 265,
+      "label": "SELECT …",
+      "variant": "emphasis"
+    },
+    {
+      "id": "db-rows",
+      "from": "postgres",
+      "to": "api",
+      "y": 298,
+      "label": "rows",
+      "variant": "return"
+    },
+    {
+      "id": "cache-fill",
+      "from": "api",
+      "to": "redis",
+      "y": 333,
+      "label": "SET key EX ttl",
+      "variant": "dashed"
+    },
+    {
+      "id": "http-response",
+      "from": "api",
+      "to": "browser",
+      "y": 395,
+      "label": "200 JSON",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "api",
+      "from": 165,
+      "to": 401,
+      "type": "backend"
+    },
+    {
+      "participant": "redis",
+      "from": 190,
+      "to": 234,
+      "type": "database"
+    },
+    {
+      "participant": "postgres",
+      "from": 260,
+      "to": 304,
+      "type": "database"
+    },
+    {
+      "participant": "redis",
+      "from": 328,
+      "to": 350,
+      "type": "database"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Cache hit",
+      "items": [
+        "If Redis returns a value, the API responds immediately",
+        "PostgreSQL is never touched on a hit"
+      ]
+    },
+    {
+      "dot": "orange",
+      "title": "Cache miss",
+      "items": [
+        "Redis returns nil, so the API queries PostgreSQL",
+        "The result is written back to Redis with a TTL",
+        "The next request for the same key is a hit"
+      ]
+    }
+  ]
+}
