@@ -1,0 +1,359 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "How One Question Is Answered (/ask/stream, cache miss)",
+    "output": ".archify/sequence-ask-stream-20261003-152409/ask-stream.html",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [
+      1080,
+      621
+    ],
+    "repository": {
+      "url": "https://github.com/piyushmaps/interview_proj",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "b15dfde9af00dedd4aabb84c8ad0a5630951b042"
+    },
+    "legend": {
+      "entries": {
+        "emphasis": {
+          "label": "LLM / main call"
+        },
+        "dashed": {
+          "label": "write / side effect"
+        },
+        "default": {
+          "label": "call"
+        }
+      }
+    }
+  },
+  "participants": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "Client",
+      "sublabel": "SSE consumer",
+      "sources": [
+        {
+          "path": "src/api/main.py",
+          "line": 192,
+          "end_line": 200,
+          "label": "/ask/stream"
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "FastAPI",
+      "sublabel": "_answer_events",
+      "sources": [
+        {
+          "path": "src/api/main.py",
+          "line": 154,
+          "end_line": 189,
+          "label": "_answer_events"
+        }
+      ]
+    },
+    {
+      "id": "cache",
+      "type": "database",
+      "label": "AnswerCache",
+      "sublabel": "in-memory",
+      "sources": [
+        {
+          "path": "src/api/cache.py",
+          "line": 96,
+          "end_line": 135,
+          "label": "get / put"
+        }
+      ]
+    },
+    {
+      "id": "agent",
+      "type": "backend",
+      "label": "LangGraph",
+      "sublabel": "route/retrieve/synth",
+      "sources": [
+        {
+          "path": "src/agent/graph.py",
+          "line": 85,
+          "end_line": 130,
+          "label": "astream_agent"
+        }
+      ]
+    },
+    {
+      "id": "chat",
+      "type": "cloud",
+      "label": "OpenAI Chat",
+      "sublabel": "gpt-4o-mini",
+      "sources": [
+        {
+          "path": "src/agent/nodes.py",
+          "line": 34,
+          "end_line": 40,
+          "label": "_llm"
+        }
+      ]
+    },
+    {
+      "id": "retriever",
+      "type": "backend",
+      "label": "Retriever",
+      "sublabel": "cutoff 0.28",
+      "sources": [
+        {
+          "path": "src/retrieval/retriever.py",
+          "line": 67,
+          "end_line": 87,
+          "label": "aretrieve"
+        }
+      ]
+    },
+    {
+      "id": "embed",
+      "type": "cloud",
+      "label": "OpenAI Embed",
+      "sublabel": "embeddings API",
+      "sources": [
+        {
+          "path": "src/retrieval/retriever.py",
+          "line": 42,
+          "end_line": 45,
+          "label": "OpenAIEmbeddings"
+        }
+      ]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "Vector store",
+      "sublabel": "FAISS / OpenSearch",
+      "sources": [
+        {
+          "path": "src/vectorstore/factory.py",
+          "line": 17,
+          "end_line": 27,
+          "label": "get_vector_store"
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "id": "post",
+      "from": "client",
+      "to": "api",
+      "y": 165,
+      "label": "POST /ask/stream",
+      "variant": "emphasis"
+    },
+    {
+      "id": "cache-get",
+      "from": "api",
+      "to": "cache",
+      "y": 193,
+      "label": "get(q, embedding)"
+    },
+    {
+      "id": "cache-miss",
+      "from": "cache",
+      "to": "api",
+      "y": 221,
+      "label": "miss",
+      "variant": "return"
+    },
+    {
+      "id": "start-agent",
+      "from": "api",
+      "to": "agent",
+      "y": 249,
+      "label": "astream_agent()",
+      "variant": "emphasis"
+    },
+    {
+      "id": "route-llm",
+      "from": "agent",
+      "to": "chat",
+      "y": 277,
+      "label": "routing prompt",
+      "variant": "emphasis"
+    },
+    {
+      "id": "route-json",
+      "from": "chat",
+      "to": "agent",
+      "y": 305,
+      "label": "sources + sub_queries",
+      "variant": "return"
+    },
+    {
+      "id": "retrieve",
+      "from": "agent",
+      "to": "retriever",
+      "y": 333,
+      "label": "aretrieve each sub-query"
+    },
+    {
+      "id": "ev-searching",
+      "from": "api",
+      "to": "client",
+      "y": 333,
+      "label": "status: searching",
+      "variant": "return"
+    },
+    {
+      "id": "sub-embed",
+      "from": "retriever",
+      "to": "embed",
+      "y": 361,
+      "label": "embed sub-query"
+    },
+    {
+      "id": "search",
+      "from": "retriever",
+      "to": "store",
+      "y": 389,
+      "label": "search routed sources"
+    },
+    {
+      "id": "evidence",
+      "from": "retriever",
+      "to": "agent",
+      "y": 417,
+      "label": "chunks ≥ 0.28 cosine",
+      "variant": "return"
+    },
+    {
+      "id": "ev-writing",
+      "from": "api",
+      "to": "client",
+      "y": 417,
+      "label": "status: writing",
+      "variant": "return"
+    },
+    {
+      "id": "synth-llm",
+      "from": "agent",
+      "to": "chat",
+      "y": 445,
+      "label": "evidence prompt",
+      "variant": "emphasis"
+    },
+    {
+      "id": "tokens",
+      "from": "chat",
+      "to": "agent",
+      "y": 473,
+      "label": "answer tokens",
+      "variant": "return"
+    },
+    {
+      "id": "ev-tokens",
+      "from": "api",
+      "to": "client",
+      "y": 473,
+      "label": "token events",
+      "variant": "return"
+    },
+    {
+      "id": "cache-put",
+      "from": "api",
+      "to": "cache",
+      "y": 501,
+      "label": "put(answer)",
+      "variant": "dashed"
+    },
+    {
+      "id": "ev-done",
+      "from": "api",
+      "to": "client",
+      "y": 501,
+      "label": "done + citations",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "api",
+      "from": 165,
+      "to": 507,
+      "type": "backend"
+    },
+    {
+      "participant": "cache",
+      "from": 189,
+      "to": 227,
+      "type": "database"
+    },
+    {
+      "participant": "agent",
+      "from": 245,
+      "to": 479,
+      "type": "backend"
+    },
+    {
+      "participant": "chat",
+      "from": 273,
+      "to": 311,
+      "type": "cloud"
+    },
+    {
+      "participant": "retriever",
+      "from": 329,
+      "to": 423,
+      "type": "backend"
+    },
+    {
+      "participant": "embed",
+      "from": 357,
+      "to": 367,
+      "type": "cloud"
+    },
+    {
+      "participant": "store",
+      "from": 385,
+      "to": 395,
+      "type": "database"
+    },
+    {
+      "participant": "chat",
+      "from": 441,
+      "to": 479,
+      "type": "cloud"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Cache check",
+      "items": [
+        "The API first embeds the question (OpenAI), then looks it up: exact normalised string, else cosine ≥ 0.75",
+        "A hit streams the stored answer as one token event plus done, with no LLM calls",
+        "A 'status: started' event is sent before the lookup"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "No evidence",
+      "items": [
+        "Hits below 0.28 cosine are dropped",
+        "If nothing is left, synthesis skips the LLM and returns a fixed refusal with zero citations"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Details",
+      "items": [
+        "Sub-queries are searched concurrently (asyncio.gather), then deduped in order",
+        "Store search runs on a worker thread so the event loop stays free",
+        "Citations are filtered to the [n] markers the answer used; errors after the 200 header arrive as an error event"
+      ]
+    }
+  ]
+}
